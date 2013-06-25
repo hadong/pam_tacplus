@@ -26,14 +26,21 @@ debug           ALL                     output debugging information via
                                         syslog(3); note, that the debugging
                                         is heavy, including passwords!
 					
-secret=STRING   ALL                     can be specified more than once;
-                                        secret key used to encrypt/decrypt
-                                        packets sent/received from the server
+secret=STRING   ALL                     if appended to server, defines secret
+                                        key used to encrypt/decrypt packets
+                                        sent/received for the server.
+                                        if defined as a separated option, it
+                                        becomes the global key for any servers
+                                        which have no secret key defined.
 
 server=HOSTNAME auth, session           can be specified more than once;
 server=IP_ADDR                          adds a TACACS+ server to the servers
 server=HOSTNAME:PORT                    list
 server=IP_ADDR:PORT
+server=HOSTNAME;secret=KEY
+server=IP_ADDR;secret=KEY
+server=HOSTNAME:PORT;secret=KEY
+server=HOSTNAME:PORT;secret=KEY
 
 timeout=INT     ALL                     connection timeout in seconds
                                         default is 5 seconds
@@ -68,6 +75,7 @@ Example configuration:
 
 #%PAM-1.0
 auth       required     /lib/security/pam_tacplus.so debug server=1.1.1.1 secret=SECRET-1
+auth       required     /lib/security/pam_tacplus.so debug server=1.1.1.1:4949;secret=SECRET-1 secret=SECRET-2
 account	   required	/lib/security/pam_tacplus.so debug secret=SECRET-1 service=ppp protocol=lcp
 account    sufficient	/lib/security/pam_exec.so /usr/local/bin/showenv.sh
 password   required	/lib/security/pam_cracklib.so

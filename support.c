@@ -32,6 +32,7 @@
 
 tacplus_server_t tac_srv[TAC_PLUS_MAXSERVERS];
 int tac_srv_no = 0;
+char *tac_global_key = NULL;
 
 char tac_service[64];
 char tac_protocol[64];
@@ -202,6 +203,8 @@ void _show_tac_servers (tacplus_server_t *servers, int size) {
         _show_tac_server(&servers[n], msg);
     }
 
+    _pam_log(LOG_DEBUG, "  Global key = %s\n", tac_global_key);
+
     return;
 }
 
@@ -224,6 +227,9 @@ int _free_tac_server (tacplus_server_t *server) {
         server->addr_cnt = 0;
     
         if (server->key != NULL) {
+            /* Should not free if sercret is pointing to default global key "" */
+            if (server->key[0])
+                free(server->key);
             server->key = NULL;
         }
     }
@@ -247,11 +253,12 @@ int _reset_tac_servers (tacplus_server_t *servers, int size) {
 }
 
 static
-int _pam_parse_server (const char *strsrv, tacplus_server_t *tac_server, const char *cur_secret) {
+int _pam_parse_server (const char *strsrv, tacplus_server_t *tac_server) {
     char *strServer;
     struct addrinfo hints, *servers, *server;
     int rv;
     char *port;
+    char *secret;
     int addr_cnt;
 
     if (strsrv && strsrv[0]) {
@@ -263,8 +270,11 @@ int _pam_parse_server (const char *strsrv, tacplus_server_t *tac_server, const c
     }
 
     port = strchr(strServer, ':');
+    secret = strchr(strServer, ';');
     if (port != NULL)
         *port = '\0';
+    if (secret != NULL)
+        *secret = '\0';
 
     memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_UNSPEC;  // use IPv4 or IPv6, whichever
@@ -283,8 +293,14 @@ int _pam_parse_server (const char *strsrv, tacplus_server_t *tac_server, const c
         tac_server->host = (char *) xcalloc(strlen(strServer)+1, sizeof(char));
         strcpy(tac_server->host, strServer);
 
-        if (cur_secret != NULL) {
-            tac_server->key = cur_secret;
+        if (secret != NULL) {
+            secret++;
+            if (!strncmp(secret, "secret=", 7)) {
+                tac_server->key = (char *) xcalloc(strlen(secret+7)+1, sizeof(char));
+                strcpy(tac_server->key, secret+7);
+            } else {
+                _pam_log(LOG_WARNING, "server %s secret syntex wrong", strServer);
+            }
         }
     } else {
         _pam_log (LOG_ERR,
@@ -301,13 +317,17 @@ int _pam_parse_server (const char *strsrv, tacplus_server_t *tac_server, const c
 
 int _pam_parse (int argc, const char **argv, int reset_srv_list) {
     int ctrl = 0;
-    const char *current_secret = NULL;
+    int i;
 
     /* Need to initialize/re-initialize the tac_servers structure */
     /* otherwise the list will grow with each call */
     if (reset_srv_list) {
         tac_srv_no = 0;
         _reset_tac_servers(tac_srv, TAC_PLUS_MAXSERVERS);
+        if (tac_global_key != NULL && tac_global_key[0]) {
+            free(tac_global_key);
+            tac_global_key = NULL;
+        }
     }
 
     tac_service[0] = 0;
@@ -341,7 +361,7 @@ int _pam_parse (int argc, const char **argv, int reset_srv_list) {
             ctrl |= PAM_TAC_ACCT;
         } else if (!strncmp (*argv, "server=", 7)) { /* authen & acct */
             if(tac_srv_no < TAC_PLUS_MAXSERVERS) { 
-                if (_pam_parse_server(*argv+7, &tac_srv[tac_srv_no], current_secret)) {
+                if (_pam_parse_server(*argv+7, &tac_srv[tac_srv_no])) {
                     tac_srv_no++;
                 }
             } else {
@@ -349,17 +369,9 @@ int _pam_parse (int argc, const char **argv, int reset_srv_list) {
                     TAC_PLUS_MAXSERVERS);
             }
         } else if (!strncmp (*argv, "secret=", 7)) {
-            int i;
+            tac_global_key = (char *) xcalloc(strlen(*argv+7)+1, sizeof(char));
+            strcpy (tac_global_key, *argv + 7);
 
-            current_secret = *argv + 7;     /* points right into argv (which is const) */
-
-            /* if 'secret=' was given after a 'server=' parameter, fill in the current secret */
-            for(i = tac_srv_no-1; i >= 0; i--) {
-                if (tac_srv[i].key != NULL)
-                    break;
-
-                tac_srv[i].key = current_secret;
-            }
         } else if (!strncmp (*argv, "timeout=", 8)) {
             /* FIXME atoi() doesn't handle invalid numeric strings well */
             tac_timeout = atoi(*argv + 8);
@@ -371,14 +383,20 @@ int _pam_parse (int argc, const char **argv, int reset_srv_list) {
         }
     }
 
-    if (ctrl & PAM_TAC_DEBUG) {
-        int n;
-
-        _pam_log(LOG_DEBUG, "%d servers defined", tac_srv_no);
-
-        for(n = 0; n < tac_srv_no; n++) {
-            _pam_log(LOG_DEBUG, "server[%d] { addr=%s, key='%s' }", n, tac_srv[n].host, tac_srv[n].key);
+    /* Set default global key */
+    if (tac_global_key == NULL) {
+        tac_global_key = "";
+    }
+    /* If individual server key is not set, set to global key */
+    for (i=0; i < tac_srv_no; i++) {
+        if (tac_srv[i].key == NULL) {
+            tac_srv[i].key = (char *) xcalloc(strlen(tac_global_key)+1, sizeof(char));
+            strcpy(tac_srv[i].key, tac_global_key);
         }
+    }
+
+    if (ctrl & PAM_TAC_DEBUG) {
+        _show_tac_servers(tac_srv, tac_srv_no);
 
         _pam_log(LOG_DEBUG, "tac_service='%s'", tac_service);
         _pam_log(LOG_DEBUG, "tac_protocol='%s'", tac_protocol);
