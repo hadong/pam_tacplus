@@ -170,13 +170,145 @@ int tacacs_get_password (pam_handle_t * pamh, int flags
     return PAM_SUCCESS;
 }
 
-int _pam_parse (int argc, const char **argv) {
+static
+void _show_tac_server(tacplus_server_t *server, char *msg) {
+    int i;
+
+    _pam_log(LOG_DEBUG, "  %s\n", msg);
+    _pam_log(LOG_DEBUG, "    host=%s\n", server->host);
+    _pam_log(LOG_DEBUG, "    addr_cnt = %d\n", server->addr_cnt);
+    for (i=0; i<TAC_PLUS_MAXADDRINFO; i++) {
+        _pam_log(LOG_DEBUG, "    addr[%d] = %p\n", i, server->addr[i]);
+    }
+    _pam_log(LOG_DEBUG, "    key=%s\n", server->key);
+
+    return;
+}
+
+static
+void _show_tac_servers (tacplus_server_t *servers, int size) {
+    int n;
+    char msg[128];
+
+    if (servers == NULL) {
+        _pam_log(LOG_ERR, "%s(), servers are NULL\n", __FUNCTION__);
+        return;
+    }
+
+    _pam_log(LOG_DEBUG, "%d servers defined\n", tac_srv_no);
+    for (n=0; n<size; n++) {
+        memset(msg, 0, 128);
+        sprintf(msg, "Server %d:\n", n+1);
+        _show_tac_server(&servers[n], msg);
+    }
+
+    return;
+}
+
+static
+int _free_tac_server (tacplus_server_t *server) {
+    int i;
+
+    if (server != NULL) {
+        if (server->host != NULL) {
+            free(server->host);
+            server->host = NULL;
+        }
+
+        for (i=0; i<server->addr_cnt; i++) {
+            if (server->addr[i] != NULL) {
+                freeaddrinfo(server->addr[i]);
+                server->addr[i] = NULL;
+            }
+        }
+        server->addr_cnt = 0;
+    
+        if (server->key != NULL) {
+            server->key = NULL;
+        }
+    }
+
+    return 1;
+}
+
+static
+int _reset_tac_servers (tacplus_server_t *servers, int size) {
+    int i;
+
+    if (servers != NULL) {
+        for (i=0; i<size; i++) {
+            _free_tac_server(&servers[i]);
+        }
+    }
+
+    tac_srv_no = 0;
+
+    return 1;
+}
+
+static
+int _pam_parse_server (const char *strsrv, tacplus_server_t *tac_server, const char *cur_secret) {
+    char *strServer;
+    struct addrinfo hints, *servers, *server;
+    int rv;
+    char *port;
+    int addr_cnt;
+
+    if (strsrv && strsrv[0]) {
+        strServer = (char *) xcalloc(strlen(strsrv)+1, sizeof(char));
+        strcpy(strServer, strsrv);
+    } else {
+        _pam_log(LOG_ERR, "empty server encountered");
+        return 0;
+    }
+
+    port = strchr(strServer, ':');
+    if (port != NULL)
+        *port = '\0';
+
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_UNSPEC;  // use IPv4 or IPv6, whichever
+    hints.ai_socktype = SOCK_STREAM;
+
+    rv = getaddrinfo(strServer, (port == NULL ? "49" : port+1), &hints, &servers);
+    if (rv == 0) {
+        for(addr_cnt=0, server = servers;
+            (server!=NULL && addr_cnt<TAC_PLUS_MAXADDRINFO);
+            server = server->ai_next) {
+            tac_server->addr[addr_cnt] = server;
+            addr_cnt++;
+        }
+        tac_server->addr_cnt = addr_cnt;
+
+        tac_server->host = (char *) xcalloc(strlen(strServer)+1, sizeof(char));
+        strcpy(tac_server->host, strServer);
+
+        if (cur_secret != NULL) {
+            tac_server->key = cur_secret;
+        }
+    } else {
+        _pam_log (LOG_ERR,
+            "skip invalid server: %s (getaddrinfo: %s)",
+            strServer, gai_strerror(rv));
+        free (strServer);
+        return 0;
+    }
+
+    free (strServer);
+
+    return 1;
+}
+
+int _pam_parse (int argc, const char **argv, int reset_srv_list) {
     int ctrl = 0;
     const char *current_secret = NULL;
 
+    /* Need to initialize/re-initialize the tac_servers structure */
     /* otherwise the list will grow with each call */
-    memset(tac_srv, 0, sizeof(tacplus_server_t) * TAC_PLUS_MAXSERVERS);
-    tac_srv_no = 0;
+    if (reset_srv_list) {
+        tac_srv_no = 0;
+        _reset_tac_servers(tac_srv, TAC_PLUS_MAXSERVERS);
+    }
 
     tac_service[0] = 0;
     tac_protocol[0] = 0;
@@ -209,35 +341,8 @@ int _pam_parse (int argc, const char **argv) {
             ctrl |= PAM_TAC_ACCT;
         } else if (!strncmp (*argv, "server=", 7)) { /* authen & acct */
             if(tac_srv_no < TAC_PLUS_MAXSERVERS) { 
-                struct addrinfo hints, *servers, *server;
-                int rv;
-                char *port, server_buf[256];
-
-                memset(&hints, 0, sizeof hints);
-                hints.ai_family = AF_UNSPEC;  /* use IPv4 or IPv6, whichever */
-                hints.ai_socktype = SOCK_STREAM;
-
-                if (strlen(*argv + 7) >= sizeof(server_buf)) {
-                    _pam_log(LOG_ERR, "server address too long, sorry");
-                    continue;
-                }
-                strcpy(server_buf, *argv + 7);
-
-                port = strchr(server_buf, ':');
-                if (port != NULL) {
-                    *port = '\0';
-					port++;
-                }
-                if ((rv = getaddrinfo(server_buf, (port == NULL) ? "49" : port, &hints, &servers)) == 0) {
-                    for(server = servers; server != NULL && tac_srv_no < TAC_PLUS_MAXSERVERS; server = server->ai_next) {
-                        tac_srv[tac_srv_no].addr = server;
-                        tac_srv[tac_srv_no].key = current_secret;
-                        tac_srv_no++;
-                    }
-                } else {
-                    _pam_log (LOG_ERR,
-                        "skip invalid server: %s (getaddrinfo: %s)",
-                        server_buf, gai_strerror(rv));
+                if (_pam_parse_server(*argv+7, &tac_srv[tac_srv_no], current_secret)) {
+                    tac_srv_no++;
                 }
             } else {
                 _pam_log(LOG_ERR, "maximum number of servers (%d) exceeded, skipping",
@@ -272,7 +377,7 @@ int _pam_parse (int argc, const char **argv) {
         _pam_log(LOG_DEBUG, "%d servers defined", tac_srv_no);
 
         for(n = 0; n < tac_srv_no; n++) {
-            _pam_log(LOG_DEBUG, "server[%d] { addr=%s, key='%s' }", n, tac_ntop(tac_srv[n].addr->ai_addr), tac_srv[n].key);
+            _pam_log(LOG_DEBUG, "server[%d] { addr=%s, key='%s' }", n, tac_srv[n].host, tac_srv[n].key);
         }
 
         _pam_log(LOG_DEBUG, "tac_service='%s'", tac_service);
@@ -283,4 +388,27 @@ int _pam_parse (int argc, const char **argv) {
 
     return ctrl;
 }    /* _pam_parse */
+
+int _duplicate_server(tacplus_server_t *dup_srv, tacplus_server_t *ori_srv) {
+    int i;
+
+    if (dup_srv==NULL || ori_srv==NULL) {
+        return 0;
+    }
+
+    _free_tac_server(dup_srv);
+
+    dup_srv->host = (char *) xcalloc(strlen(ori_srv->host)+1, sizeof(char));
+    strcpy(dup_srv->host, ori_srv->host);
+
+    for (i=0; i<TAC_PLUS_MAXADDRINFO; i++) {
+        dup_srv->addr[i] = ori_srv->addr[i];
+    }
+    dup_srv->addr_cnt = ori_srv->addr_cnt;
+
+    dup_srv->key = (char *) xcalloc(strlen(ori_srv->key)+1, sizeof(char));
+    strcpy(dup_srv->key, ori_srv->key);
+
+    return 1;
+}
 

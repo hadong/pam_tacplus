@@ -82,6 +82,10 @@ struct areply {
 #define TAC_PLUS_MAXSERVERS 8
 #endif
 
+#ifndef TAC_PLUS_MAXADDRINFO	
+#define TAC_PLUS_MAXADDRINFO 4
+#endif
+
 #ifndef TAC_PLUS_PORT
 #define	TAC_PLUS_PORT 49
 #endif

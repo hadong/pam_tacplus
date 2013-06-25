@@ -27,7 +27,9 @@
 #include <security/pam_modules.h>
 
 typedef struct {
-    struct addrinfo *addr;
+    char *host;
+    struct addrinfo *addr[TAC_PLUS_MAXADDRINFO];
+    int addr_cnt;
     const char *key;
 } tacplus_server_t;
 
@@ -38,7 +40,7 @@ extern char tac_service[64];
 extern char tac_protocol[64];
 extern char tac_prompt[64];
 
-int _pam_parse (int, const char **);
+int _pam_parse (int, const char **, int);
 unsigned long _resolve_name (char *);
 unsigned long _getserveraddr (char *serv);
 int tacacs_get_password (pam_handle_t *, int, int, char **);
@@ -49,5 +51,6 @@ char *_pam_get_user(pam_handle_t *);
 char *_pam_get_terminal(pam_handle_t *);
 char *_pam_get_rhost(pam_handle_t *);
 
+int _duplicate_server(tacplus_server_t *, tacplus_server_t *);
 #endif  /* PAM_TACPLUS_SUPPORT_H */
 

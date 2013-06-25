@@ -120,7 +120,7 @@ int _pam_account(pam_handle_t *pamh, int argc, const char **argv,
     int status = PAM_SESSION_ERR;
   
     typemsg = tac_acct_flag2str(type);
-    ctrl = _pam_parse (argc, argv);
+    ctrl = _pam_parse (argc, argv, 1);
 
     if (ctrl & PAM_TAC_DEBUG)
         syslog (LOG_DEBUG, "%s: [%s] called (pam_tacplus v%u.%u.%u)"
@@ -169,12 +169,18 @@ int _pam_account(pam_handle_t *pamh, int argc, const char **argv,
     if(!(ctrl & PAM_TAC_ACCT)) {
     /* normal mode, send packet to the first available server */
         int srv_i = 0;
+        int srv_j = 0;
                   
         status = PAM_SESSION_ERR;
         while ((status == PAM_SESSION_ERR) && (srv_i < tac_srv_no)) {
-            int tac_fd;
+            int tac_fd = -1;
+            tacplus_server_t *srv = NULL;
                                   
-            tac_fd = tac_connect_single(tac_srv[srv_i].addr, tac_srv[srv_i].key);
+            for (srv=&tac_srv[srv_i], srv_j=0; (srv_j<srv->addr_cnt && srv->addr[srv_j]!=NULL); srv_j++) {
+                tac_fd = tac_connect_single(srv->addr[srv_j], srv->key);
+                if (tac_fd >= 0)
+                    break;
+            }
             if(tac_fd < 0) {
                 _pam_log(LOG_WARNING, "%s: error sending %s (fd)",
                     __FUNCTION__, typemsg);
@@ -204,12 +210,18 @@ int _pam_account(pam_handle_t *pamh, int argc, const char **argv,
     } else {
         /* send packet to all servers specified */
         int srv_i;
+        int srv_j;
                   
         status = PAM_SESSION_ERR;
         for(srv_i = 0; srv_i < tac_srv_no; srv_i++) {
-            int tac_fd;
-                                  
-            tac_fd = tac_connect_single(tac_srv[srv_i].addr, tac_srv[srv_i].key);
+            int tac_fd = -1;
+            tacplus_server_t *srv = NULL;
+
+            for (srv=&tac_srv[srv_i], srv_j=0; (srv_j<srv->addr_cnt && srv->addr[srv_j]!=NULL); srv_j++) {
+                tac_fd = tac_connect_single(srv->addr[srv_j], srv->key);
+                if (tac_fd >= 0)
+                    break;
+            }
             if(tac_fd < 0) {
                 _pam_log(LOG_WARNING, "%s: error sending %s (fd)",
                     __FUNCTION__, typemsg);
@@ -260,13 +272,13 @@ int pam_sm_authenticate (pam_handle_t * pamh, int flags,
     char *pass;
     char *tty;
     char *r_addr;
-    int srv_i;
+    int srv_i, srv_j;
     int tac_fd;
     int status = PAM_AUTH_ERR;
 
     user = pass = tty = r_addr = NULL;
 
-    ctrl = _pam_parse (argc, argv);
+    ctrl = _pam_parse (argc, argv, 1);
 
     if (ctrl & PAM_TAC_DEBUG)
         syslog (LOG_DEBUG, "%s: called (pam_tacplus v%u.%u.%u)"
@@ -307,10 +319,16 @@ int pam_sm_authenticate (pam_handle_t * pamh, int flags,
 
     for (srv_i = 0; srv_i < tac_srv_no; srv_i++) {
         int msg = TAC_PLUS_AUTHEN_STATUS_FAIL;
+        tacplus_server_t *srv = NULL;
+
         if (ctrl & PAM_TAC_DEBUG)
             syslog (LOG_DEBUG, "%s: trying srv %d", __FUNCTION__, srv_i );
 
-        tac_fd = tac_connect_single(tac_srv[srv_i].addr, tac_srv[srv_i].key);
+        for (srv=&tac_srv[srv_i], srv_j=0; (srv_j<srv->addr_cnt && srv->addr[srv_j]!=NULL); srv_j++) {
+            tac_fd = tac_connect_single(srv->addr[srv_j], srv->key);
+            if (tac_fd >= 0)
+                break;
+        }
         if (tac_fd < 0) {
             _pam_log (LOG_ERR, "connection failed srv %d: %m", srv_i);
             if (srv_i == tac_srv_no-1) {
@@ -340,8 +358,7 @@ int pam_sm_authenticate (pam_handle_t * pamh, int flags,
                         /* OK, we got authenticated; save the server that
                            accepted us for pam_sm_acct_mgmt and exit the loop */
                         status = PAM_SUCCESS;
-                        active_server.addr = tac_srv[srv_i].addr;
-                        active_server.key = tac_srv[srv_i].key;
+                        _duplicate_server(&active_server, &tac_srv[srv_i]);
                         close(tac_fd);
 
                         if (ctrl & PAM_TAC_DEBUG)
@@ -357,8 +374,7 @@ int pam_sm_authenticate (pam_handle_t * pamh, int flags,
                 /* OK, we got authenticated; save the server that
                    accepted us for pam_sm_acct_mgmt and exit the loop */
                 status = PAM_SUCCESS;
-                active_server.addr = tac_srv[srv_i].addr;
-                active_server.key = tac_srv[srv_i].key;
+                _duplicate_server(&active_server, &tac_srv[srv_i]);
                 close(tac_fd);
 
                 if (ctrl & PAM_TAC_DEBUG)
@@ -386,7 +402,7 @@ PAM_EXTERN
 int pam_sm_setcred (pam_handle_t * pamh, int flags,
     int argc, const char **argv) {
 
-    int ctrl = _pam_parse (argc, argv);
+    int ctrl = _pam_parse (argc, argv, 1);
 
     if (ctrl & PAM_TAC_DEBUG)
         syslog (LOG_DEBUG, "%s: called (pam_tacplus v%u.%u.%u)"
@@ -411,6 +427,7 @@ int pam_sm_acct_mgmt (pam_handle_t * pamh, int flags,
     struct areply arep;
     struct tac_attrib *attr = NULL;
     int tac_fd;
+    int i;
 
     user = tty = r_addr = NULL;
   
@@ -419,7 +436,7 @@ int pam_sm_acct_mgmt (pam_handle_t * pamh, int flags,
        but since PAM service names are incompatible TACACS+
        we have to pass it via command line argument until a better
        solution is found ;) */
-    ctrl = _pam_parse (argc, argv);
+    ctrl = _pam_parse (argc, argv, 0);
 
     if (ctrl & PAM_TAC_DEBUG)
         syslog (LOG_DEBUG, "%s: called (pam_tacplus v%u.%u.%u)"
@@ -451,7 +468,7 @@ int pam_sm_acct_mgmt (pam_handle_t * pamh, int flags,
     }
     if (ctrl & PAM_TAC_DEBUG)
         syslog (LOG_DEBUG, "%s: active server is [%s]", __FUNCTION__,
-            tac_ntop(active_server.addr->ai_addr));
+            active_server.host);
 
     /* checks for specific data required by TACACS+, which should
        be supplied in command line  */
@@ -467,7 +484,11 @@ int pam_sm_acct_mgmt (pam_handle_t * pamh, int flags,
     tac_add_attrib(&attr, "service", tac_service);
     tac_add_attrib(&attr, "protocol", tac_protocol);
 
-    tac_fd = tac_connect_single(active_server.addr, active_server.key);
+    for (i=0; (i<active_server.addr_cnt && active_server.addr[i]!=NULL); i++) {
+        tac_fd = tac_connect_single(active_server.addr[i], active_server.key);
+        if (tac_fd >= 0)
+            break;
+    }
     if(tac_fd < 0) {
         _pam_log (LOG_ERR, "TACACS+ server unavailable");
         if(arep.msg != NULL)
@@ -592,7 +613,7 @@ PAM_EXTERN
 int pam_sm_chauthtok (pam_handle_t * pamh, int flags,
     int argc, const char **argv) {
 
-    int ctrl = _pam_parse (argc, argv);
+    int ctrl = _pam_parse (argc, argv, 0);
 
     if (ctrl & PAM_TAC_DEBUG)
         syslog (LOG_DEBUG, "%s: called (pam_tacplus v%u.%u.%u)"
