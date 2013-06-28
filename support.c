@@ -209,6 +209,20 @@ void _show_tac_servers (tacplus_server_t *servers, int size) {
 }
 
 static
+int _erase_server_options (tacplus_server_t *server) {
+    if (server == NULL) {
+        return 0;
+    }
+
+    if (server->key) {
+        free (server->key);
+    }
+    server->key = NULL;
+
+    return 1;
+}
+
+static
 int _free_tac_server (tacplus_server_t *server) {
     int i;
 
@@ -226,12 +240,7 @@ int _free_tac_server (tacplus_server_t *server) {
         }
         server->addr_cnt = 0;
     
-        if (server->key != NULL) {
-            /* Should not free if sercret is pointing to default global key "" */
-            if (server->key[0])
-                free(server->key);
-            server->key = NULL;
-        }
+        _erase_server_options(server);
     }
 
     return 1;
@@ -253,12 +262,89 @@ int _reset_tac_servers (tacplus_server_t *servers, int size) {
 }
 
 static
+int _pam_parse_server_addr (char *straddr, char **host, char **port) {
+    char *p = NULL;
+
+    if (straddr == NULL) {
+        return 0;
+    }
+
+    if (*straddr == '[') {
+        /* the input string should be as "[ip v6]:port" or "[ip v6]" format */
+        p = strchr(straddr, ']');
+        if(p) {
+            *host = straddr + 1;
+            *p++ = '\0';
+            p = strchr(p, ':');
+            if (p) {
+                *port = p + 1;
+            }
+            else {
+                *port = NULL;
+            }
+            return 1;
+        } else {
+            _pam_log(LOG_ERR, "Missing IPv6 address de-limiter");
+            *host = NULL;
+            *port = NULL;
+            return 0;
+        }
+    }
+    else if ( (p = strchr(straddr, ':')) ) {
+        /* input string is as "ip v6" or "ip v4:port" or "hostname:port" format */
+        *host = straddr;
+
+        /* Set port pointer */
+        *port = p + 1;
+        /* unless */
+        if ( (strchr(p+1, ':')) ) {
+            /* a 2nd ':' is found */
+            /* input string is in "ip v6" format */
+            *port = NULL;
+        }
+        else {
+            *p = '\0';
+        }
+    }
+    else {
+        /* input string is as "ip v4" or "hostname" format */
+        *host = straddr;
+        *port = NULL;
+    }
+    
+    return 1;
+}
+
+static
+int _pam_parse_server_options (char *stroptions, tacplus_server_t *tac_server) {
+    char *secret = NULL;
+
+    if (stroptions==NULL || stroptions[0]=='\0' || tac_server==NULL) {
+        return 0;
+    }
+
+    _erase_server_options(tac_server);
+
+    if (!strncmp(stroptions, "secret=", 7)) {
+        secret = stroptions + 7;
+        tac_server->key = (char *)xcalloc(strlen(secret)+1, sizeof(char));
+        strcpy(tac_server->key, secret);
+    }
+    else {
+        _pam_log (LOG_WARNING, "unrecognized server option: %s", stroptions);
+        return 0;
+    }
+
+    return 1;
+}
+
+static
 int _pam_parse_server (const char *strsrv, tacplus_server_t *tac_server) {
     char *strServer;
     struct addrinfo hints, *servers, *server;
     int rv;
-    char *port;
-    char *secret;
+    char *host, *port;
+    char *options;
     int addr_cnt;
 
     if (strsrv && strsrv[0]) {
@@ -269,39 +355,35 @@ int _pam_parse_server (const char *strsrv, tacplus_server_t *tac_server) {
         return 0;
     }
 
-    port = strchr(strServer, ':');
-    secret = strchr(strServer, ';');
-    if (port != NULL)
-        *port = '\0';
-    if (secret != NULL)
-        *secret = '\0';
+    options = strchr(strServer, ';');
+
+    if (options) {
+        *options++ = '\0';
+        _pam_parse_server_addr(strServer, &host, &port);
+        _pam_parse_server_options(options, tac_server);
+    }
+    else {
+        _pam_parse_server_addr(strServer, &host, &port);
+        _erase_server_options(tac_server);
+    }
 
     memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_UNSPEC;  // use IPv4 or IPv6, whichever
     hints.ai_socktype = SOCK_STREAM;
 
-    rv = getaddrinfo(strServer, (port == NULL ? "49" : port+1), &hints, &servers);
+    rv = getaddrinfo(host, (port==NULL ? "49" : port), &hints, &servers);
     if (rv == 0) {
         for(addr_cnt=0, server = servers;
             (server!=NULL && addr_cnt<TAC_PLUS_MAXADDRINFO);
-            server = server->ai_next) {
+            server = server->ai_next)
+        {
             tac_server->addr[addr_cnt] = server;
             addr_cnt++;
         }
         tac_server->addr_cnt = addr_cnt;
 
-        tac_server->host = (char *) xcalloc(strlen(strServer)+1, sizeof(char));
-        strcpy(tac_server->host, strServer);
-
-        if (secret != NULL) {
-            secret++;
-            if (!strncmp(secret, "secret=", 7)) {
-                tac_server->key = (char *) xcalloc(strlen(secret+7)+1, sizeof(char));
-                strcpy(tac_server->key, secret+7);
-            } else {
-                _pam_log(LOG_WARNING, "server %s secret syntex wrong", strServer);
-            }
-        }
+        tac_server->host = (char *) xcalloc(strlen(host)+1, sizeof(char));
+        strcpy(tac_server->host, host);
     } else {
         _pam_log (LOG_ERR,
             "skip invalid server: %s (getaddrinfo: %s)",
