@@ -32,7 +32,7 @@
 #include "libtac.h"
 
 /* Pointer to TACACS+ connection timeout */
-int tac_timeout = 5;
+int tac_timeout = TAC_DEFAULT_TIMEOUT;
 
 /* Returns file descriptor of open connection
    to the first available server from list passed

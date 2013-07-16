@@ -182,6 +182,7 @@ void _show_tac_server(tacplus_server_t *server, char *msg) {
         _pam_log(LOG_DEBUG, "    addr[%d] = %p\n", i, server->addr[i]);
     }
     _pam_log(LOG_DEBUG, "    key=%s\n", server->key);
+    _pam_log(LOG_DEBUG, "    timeout=%d\n", server->timeout);
 
     return;
 }
@@ -204,6 +205,7 @@ void _show_tac_servers (tacplus_server_t *servers, int size) {
     }
 
     _pam_log(LOG_DEBUG, "  Global key = %s\n", tac_global_key);
+    _pam_log(LOG_DEBUG, "  Global timeout = %d\n", tac_timeout);
 
     return;
 }
@@ -218,6 +220,8 @@ int _erase_server_options (tacplus_server_t *server) {
         free (server->key);
     }
     server->key = NULL;
+
+    server->timeout = -1;
 
     return 1;
 }
@@ -316,24 +320,53 @@ int _pam_parse_server_addr (char *straddr, char **host, char **port) {
 }
 
 static
-int _pam_parse_server_options (char *stroptions, tacplus_server_t *tac_server) {
+int _pam_parse_server_options (char *_stroptions, tacplus_server_t *tac_server) {
+    char *options = NULL;
+    char *opt=NULL, *sep = NULL;
     char *secret = NULL;
 
-    if (stroptions==NULL || stroptions[0]=='\0' || tac_server==NULL) {
+    if (_stroptions==NULL || _stroptions[0]=='\0' || tac_server==NULL) {
+        return 0;
+    }
+
+    options = strdup(_stroptions);
+    if (options == NULL) {
         return 0;
     }
 
     _erase_server_options(tac_server);
 
-    if (!strncmp(stroptions, "secret=", 7)) {
-        secret = stroptions + 7;
-        tac_server->key = (char *)xcalloc(strlen(secret)+1, sizeof(char));
-        strcpy(tac_server->key, secret);
-    }
-    else {
-        _pam_log (LOG_WARNING, "unrecognized server option: %s", stroptions);
-        return 0;
-    }
+    opt = options;
+    do {
+        sep = strchr(opt, SRV_OPTION_SEP);
+        if (sep != NULL) {
+            *sep = '\0';
+        }
+
+        if (!strncmp(opt, "secret=", 7)) {
+            secret = opt + 7;
+            tac_server->key = (char *)xcalloc(strlen(secret)+1, sizeof(char));
+            strcpy(tac_server->key, secret);
+        }
+        else if (!strncmp(opt, "timeout=", 8)) {
+            /* FIXME atoi() doesn't handle invalid numeric strings well */
+            tac_server->timeout = atoi(opt + 8);
+
+            if (tac_server->timeout < 0)
+                tac_server->timeout = 0;
+        }
+        else {
+            _pam_log (LOG_WARNING, "unrecognized server option: %s", opt);
+        }
+
+        if (sep != NULL) {
+            opt = sep + 1;  /* Point to next options */
+        }
+        else {
+            opt = NULL;  /* No more options */
+        }
+
+    } while(opt!=NULL && opt[0]!='\0');
 
     return 1;
 }
@@ -410,6 +443,7 @@ int _pam_parse (int argc, const char **argv, int reset_srv_list) {
             free(tac_global_key);
             tac_global_key = NULL;
         }
+        tac_timeout = TAC_DEFAULT_TIMEOUT;
     }
 
     tac_service[0] = 0;
@@ -469,11 +503,14 @@ int _pam_parse (int argc, const char **argv, int reset_srv_list) {
     if (tac_global_key == NULL) {
         tac_global_key = "";
     }
-    /* If individual server key is not set, set to global key */
+    /* If individual server key/timeout is not set, set to global key/timeout */
     for (i=0; i < tac_srv_no; i++) {
         if (tac_srv[i].key == NULL) {
             tac_srv[i].key = (char *) xcalloc(strlen(tac_global_key)+1, sizeof(char));
             strcpy(tac_srv[i].key, tac_global_key);
+        }
+        if (tac_srv[i].timeout == -1) {
+            tac_srv[i].timeout = tac_timeout;
         }
     }
 
@@ -508,6 +545,8 @@ int _duplicate_server(tacplus_server_t *dup_srv, tacplus_server_t *ori_srv) {
 
     dup_srv->key = (char *) xcalloc(strlen(ori_srv->key)+1, sizeof(char));
     strcpy(dup_srv->key, ori_srv->key);
+
+    dup_srv->timeout = ori_srv->timeout;
 
     return 1;
 }

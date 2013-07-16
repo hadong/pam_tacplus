@@ -90,6 +90,10 @@ struct areply {
 #define	TAC_PLUS_PORT 49
 #endif
 
+#ifndef TAC_DEFAULT_TIMEOUT
+#define TAC_DEFAULT_TIMEOUT 5
+#endif
+
 #define TAC_PLUS_READ_TIMEOUT  180    /* seconds */
 #define TAC_PLUS_WRITE_TIMEOUT 180    /* seconds */
 

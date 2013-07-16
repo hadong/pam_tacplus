@@ -26,11 +26,14 @@
 
 #include <security/pam_modules.h>
 
+#define SRV_OPTION_SEP (';')
+
 typedef struct {
     char *host;
     struct addrinfo *addr[TAC_PLUS_MAXADDRINFO];
     int addr_cnt;
     char *key;
+    int timeout;
 } tacplus_server_t;
 
 extern tacplus_server_t tac_srv[TAC_PLUS_MAXSERVERS];

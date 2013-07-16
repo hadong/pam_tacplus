@@ -37,10 +37,8 @@ server=HOSTNAME auth, session           can be specified more than once;
 server=IP_ADDR                          adds a TACACS+ server to the servers
 server=HOSTNAME:PORT                    list
 server=IP_ADDR:PORT
-server=HOSTNAME;secret=KEY
-server=IP_ADDR;secret=KEY
-server=HOSTNAME:PORT;secret=KEY
-server=HOSTNAME:PORT;secret=KEY
+server=HOSTNAME;[server_options]        current supported server options are:
+server=IP_ADDR;[server_options]         secret and timeout. Separated by semicolon
 
 timeout=INT     ALL                     connection timeout in seconds
                                         default is 5 seconds
@@ -75,7 +73,7 @@ Example configuration:
 
 #%PAM-1.0
 auth       required     /lib/security/pam_tacplus.so debug server=1.1.1.1 secret=SECRET-1
-auth       required     /lib/security/pam_tacplus.so debug server=1.1.1.1:4949;secret=SECRET-1 secret=SECRET-2
+auth       required     /lib/security/pam_tacplus.so debug server=1.1.1.1:4949;secret=SECRET-1;timeout=10 secret=SECRET-2 timeout=5
 account	   required	/lib/security/pam_tacplus.so debug secret=SECRET-1 service=ppp protocol=lcp
 account    sufficient	/lib/security/pam_exec.so /usr/local/bin/showenv.sh
 password   required	/lib/security/pam_cracklib.so
