@@ -175,9 +175,9 @@ int _pam_account(pam_handle_t *pamh, int argc, const char **argv,
         while ((status == PAM_SESSION_ERR) && (srv_i < tac_srv_no)) {
             int tac_fd = -1;
             tacplus_server_t *srv = NULL;
-                                  
+
             for (srv=&tac_srv[srv_i], srv_j=0; (srv_j<srv->addr_cnt && srv->addr[srv_j]!=NULL); srv_j++) {
-                tac_fd = tac_connect_single(srv->addr[srv_j], srv->key);
+                tac_fd = tac_connect_single(srv->addr[srv_j], srv->key, srv->timeout);
                 if (tac_fd >= 0)
                     break;
             }
@@ -218,7 +218,7 @@ int _pam_account(pam_handle_t *pamh, int argc, const char **argv,
             tacplus_server_t *srv = NULL;
 
             for (srv=&tac_srv[srv_i], srv_j=0; (srv_j<srv->addr_cnt && srv->addr[srv_j]!=NULL); srv_j++) {
-                tac_fd = tac_connect_single(srv->addr[srv_j], srv->key);
+                tac_fd = tac_connect_single(srv->addr[srv_j], srv->key, srv->timeout);
                 if (tac_fd >= 0)
                     break;
             }
@@ -325,7 +325,7 @@ int pam_sm_authenticate (pam_handle_t * pamh, int flags,
             syslog (LOG_DEBUG, "%s: trying srv %d", __FUNCTION__, srv_i );
 
         for (srv=&tac_srv[srv_i], srv_j=0; (srv_j<srv->addr_cnt && srv->addr[srv_j]!=NULL); srv_j++) {
-            tac_fd = tac_connect_single(srv->addr[srv_j], srv->key);
+            tac_fd = tac_connect_single(srv->addr[srv_j], srv->key, srv->timeout);
             if (tac_fd >= 0)
                 break;
         }
@@ -485,7 +485,7 @@ int pam_sm_acct_mgmt (pam_handle_t * pamh, int flags,
     tac_add_attrib(&attr, "protocol", tac_protocol);
 
     for (i=0; (i<active_server.addr_cnt && active_server.addr[i]!=NULL); i++) {
-        tac_fd = tac_connect_single(active_server.addr[i], active_server.key);
+        tac_fd = tac_connect_single(active_server.addr[i], active_server.key, active_server.timeout);
         if (tac_fd >= 0)
             break;
     }
